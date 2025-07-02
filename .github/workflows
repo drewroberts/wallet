@@ -1,0 +1,46 @@
+wip
+
+name: Sample production flow (manual)
+
+on: 
+  workflow_dispatch:
+    inputs:
+      command:
+        description: Artisan command (ex. route:list)
+        required: true
+
+jobs:
+  seed:
+    name: Artisan execution
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+      - name: ENV setup
+        run: 'echo "$ENV_VARIABLES" > .env'
+        shell: bash
+        env:
+          ENV_VARIABLES: ${{secrets.PRODUCTION_ENV}}
+      - uses: nanasess/setup-php@master
+        with:
+          php-version: '7.4'
+      - name: Install Dependencies
+        run: composer install
+      - name: Generate passport keys
+        run: php artisan passport:keys
+      - uses: google-github-actions/setup-gcloud@main
+        with:
+          version: '290.0.1'
+          project_id: ${{ secrets.PROJECT_ID }}
+          service_account_key: ${{ secrets.GOOGLE_APPLICATION_KEY }}
+          export_default_credentials: true
+      - name: Execute command
+        run: |
+          wget https://dl.google.com/cloudsql/cloud_sql_proxy.linux.amd64 -O cloud_sql_proxy
+          chmod +x cloud_sql_proxy
+          sudo mkdir /cloudsql
+          sudo chmod 777 /cloudsql          
+          ./cloud_sql_proxy -dir=/cloudsql -instances=${{ secrets.CLOUDSQL_INSTANCE }} &
+          sleep 2
+          php artisan ${{ github.event.inputs.command }}
