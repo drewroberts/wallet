@@ -1,0 +1,71 @@
+name: Deploy production
+
+on:
+  push:
+    branches:
+    - master
+
+jobs:
+  deploy:
+    name: Deploy to App Engine
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+      - name: ENV setup
+        run: 'echo "$ENV_VARIABLES" > .env'
+        shell: bash
+        env:
+          ENV_VARIABLES: ${{secrets.PRODUCTION_ENV}}
+      - name: Passport keys setup
+        run: |
+          echo "$PRODUCTION_PRIVATE_KEY" > storage/oauth-private.key
+          echo "$PRODUCTION_PUBLIC_KEY" > storage/oauth-public.key
+        env:
+          PRODUCTION_PRIVATE_KEY: ${{secrets.PRODUCTION_PRIVATE_KEY}}
+          PRODUCTION_PUBLIC_KEY: ${{secrets.PRODUCTION_PUBLIC_KEY}}
+      - uses: nanasess/setup-php@master
+        with:
+          php-version: '7.4'
+      - name: Update mirrors
+        run: composer update mirrors
+      - name: Install Dependencies
+        run: composer install
+      - name: Install NPM dependencies
+        run: npm install
+      - name: Compile assets
+        run: npm run production
+      - uses: google-github-actions/setup-gcloud@main
+        with:
+          version: '290.0.1'
+          project_id: ${{ secrets.PROJECT_ID }}
+          service_account_key: ${{ secrets.GOOGLE_APPLICATION_KEY }}
+          export_default_credentials: true
+      - name: Clear cache
+        run: php artisan cache:clear
+      - name: Clear composer cache
+        run: composer clear-cache
+      - name: Dump Autoload
+        run: composer dump-autoload
+      - name: Seed and Migrate
+        run: |
+          wget https://dl.google.com/cloudsql/cloud_sql_proxy.linux.amd64 -O cloud_sql_proxy
+          chmod +x cloud_sql_proxy
+          sudo mkdir /cloudsql
+          sudo chmod 777 /cloudsql          
+          ./cloud_sql_proxy -dir=/cloudsql -instances=${{ secrets.CLOUDSQL_INSTANCE }} &
+          sleep 2
+          php artisan migrate --force
+          php artisan migrate:status
+      # Setup and configure gcloud CLI
+      - name: Directory Permissions
+        run: cp .ci/production/app.yaml app.yaml
+      - name: Install beta
+        run: gcloud components install beta
+      - id: Deploy
+        run: gcloud beta app deploy --no-cache
+      - id: Cron
+        uses: google-github-actions/deploy-appengine@main
+        with:
+          deliverables: .ci/production/cron.yml
